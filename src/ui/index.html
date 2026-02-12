@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>strikemd</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header id="toolbar">
+    <div class="toolbar-left">
+      <h1>strikemd</h1>
+      <span id="file-name" class="file-badge"></span>
+    </div>
+    <div class="toolbar-center">
+      <select id="check-select">
+        <option value="">Select a check...</option>
+      </select>
+      <button id="run-btn" class="btn btn-primary" disabled>Run</button>
+      <span id="status" class="status"></span>
+    </div>
+    <div class="toolbar-right">
+      <button id="accept-all-btn" class="btn btn-accept" style="display:none">Accept All</button>
+      <button id="reject-all-btn" class="btn btn-reject" style="display:none">Reject All</button>
+      <button id="save-btn" class="btn btn-save" disabled>Save</button>
+    </div>
+  </header>
+
+  <div id="layout" class="layout">
+    <main id="content" class="content"></main>
+    <aside id="sidebar" class="sidebar"></aside>
+  </div>
+
+  <svg id="lines" class="lines-overlay"></svg>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
