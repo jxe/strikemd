@@ -36,9 +36,10 @@ RULES:
 - Content inside <del> and <ins> is raw markdown, not HTML-escaped.
 - Do NOT use double quotes inside the comment attribute — use single quotes instead.
 - Preserve all LaTeX math, footnotes, citations, and formatting exactly.
-- Make targeted changes. Do not rewrite passages unnecessarily.`;
+- Make targeted changes. Do not rewrite passages unnecessarily.
+- Try to infer the audience and purpose of the document and make improvements that fit the style and tone.`;
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+const DEFAULT_MODEL = "claude-opus-4-6"
 const THINKING_BUDGET = 10000;
 
 export type StreamEvent =

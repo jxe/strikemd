@@ -60,13 +60,16 @@ async function main() {
     process.exit(0);
   }
 
-  // Extract --key flag
+  // Extract flags
   let cliApiKey: string | undefined;
+  let debug = false;
   const filteredArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--key" && i + 1 < args.length) {
       cliApiKey = args[i + 1];
       i++; // skip the value
+    } else if (args[i] === "--debug") {
+      debug = true;
     } else {
       filteredArgs.push(args[i]);
     }
@@ -121,7 +124,7 @@ async function main() {
   console.log(`Editing: ${filePath}\n`);
 
   // Open browser
-  Bun.spawn(["open", url]);
+  Bun.spawn(["open", debug ? `${url}?debug` : url]);
 }
 
 main().catch((err) => {

@@ -27,6 +27,11 @@ async function init() {
     select.appendChild(opt);
   }
 
+  // Show debug panel if ?debug is in URL
+  if (new URLSearchParams(location.search).has("debug")) {
+    document.getElementById("debug-panel").style.display = "";
+  }
+
   // Render the plain markdown
   renderPlainMarkdown(currentMarkdown);
 
@@ -145,6 +150,7 @@ function handleStreamEvent(eventType, evt) {
       setStatus(`${changes.length} suggestion${changes.length !== 1 ? "s" : ""}`, "");
       renderAnnotated();
       showBulkButtons(true);
+      updateDebug();
       break;
     case "error":
       setStatus(`Error: ${evt.message}`, "error");
@@ -378,6 +384,7 @@ function afterMutation() {
     showBulkButtons(true);
     setStatus(`${changes.length} suggestion${changes.length !== 1 ? "s" : ""} remaining`, "");
   }
+  updateDebug();
   saveFile();
 }
 
@@ -545,6 +552,11 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.remove("hidden");
   setTimeout(() => toast.classList.add("hidden"), 2500);
+}
+
+function updateDebug() {
+  const el = document.getElementById("debug-raw");
+  if (el) el.value = annotatedMarkdown ?? "(null)";
 }
 
 function escapeHtml(text) {
