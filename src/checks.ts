@@ -28,13 +28,17 @@ export async function loadChecks(projectRoot: string): Promise<Record<string, Ch
   const userPath = join(projectRoot, ".strikemd", "checks.md");
   if (existsSync(userPath)) {
     const userContent = await Bun.file(userPath).text();
-    return parseChecksMarkdown(userContent);
+    const checks = parseChecksMarkdown(userContent);
+    console.log(`Checks: .strikemd/checks.md (${Object.keys(checks).length})`);
+    return checks;
   }
 
   // Otherwise fall back to built-in defaults
   const defaultsPath = join(import.meta.dir, "..", "checks", "defaults.md");
   const defaultsContent = await Bun.file(defaultsPath).text();
-  return parseChecksMarkdown(defaultsContent);
+  const checks = parseChecksMarkdown(defaultsContent);
+  console.log(`Checks: built-in defaults (${Object.keys(checks).length})`);
+  return checks;
 }
 
 export function listChecks(checks: Record<string, Check>): void {

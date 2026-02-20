@@ -28,17 +28,20 @@ RULES:
 - Do NOT use double quotes inside the comment attribute — use single quotes instead.
 - Make targeted changes. Do not rewrite passages unnecessarily.`;
 
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+
 export async function runAnnotation(
   markdown: string,
   check: Check,
-  apiKey: string
+  apiKey: string,
+  model: string = DEFAULT_MODEL
 ): Promise<string> {
   const client = new Anthropic({ apiKey });
 
   const systemPrompt = `${check.prompt}\n${ANNOTATION_INSTRUCTIONS}`;
 
   const message = await client.messages.create({
-    model: "claude-sonnet-4-5-20250929",
+    model,
     max_tokens: 16384,
     system: systemPrompt,
     messages: [

@@ -59,7 +59,8 @@ body {
   gap: 8px;
 }
 
-#check-select {
+#check-select,
+#model-select {
   padding: 5px 10px;
   border: 1px solid #ccc;
   border-radius: 4px;

@@ -11,7 +11,8 @@
     "checks"
   ],
   "scripts": {
-    "start": "bun src/index.ts"
+    "link": "bun link",
+    "publish": "npm publish"
   },
   "keywords": ["markdown", "editor", "ai", "editorial", "suggestions", "cli", "bun"],
   "license": "MIT",

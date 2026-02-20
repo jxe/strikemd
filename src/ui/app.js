@@ -69,7 +69,7 @@ async function runCheck() {
     const resp = await fetch("/api/annotate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ markdown: currentMarkdown, checkName }),
+      body: JSON.stringify({ markdown: currentMarkdown, checkName, model: document.getElementById("model-select").value }),
     });
 
     const data = await resp.json();

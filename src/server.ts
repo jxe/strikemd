@@ -54,13 +54,13 @@ export function startServer(options: ServerOptions): { url: string; stop: () => 
       if (url.pathname === "/api/annotate" && req.method === "POST") {
         try {
           const checks = await loadChecks(projectRoot);
-          const body = await req.json() as { markdown: string; checkName: string };
+          const body = await req.json() as { markdown: string; checkName: string; model?: string };
           const check = checks[body.checkName];
           if (!check) {
             return Response.json({ error: `Unknown check: ${body.checkName}` }, { status: 400 });
           }
-          console.log(`Running check "${body.checkName}"...`);
-          const annotated = await runAnnotation(body.markdown, check, apiKey);
+          console.log(`Running check "${body.checkName}" with ${body.model ?? "default model"}...`);
+          const annotated = await runAnnotation(body.markdown, check, apiKey, body.model);
           console.log(`Check "${body.checkName}" complete.`);
           return Response.json({ annotated });
         } catch (err: any) {

@@ -8,21 +8,27 @@ import { startServer } from "./server";
 async function main() {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-    console.log("Usage: strikemd <file.md> [--key <api-key>]");
-    console.log("       strikemd init");
-    console.log("       strikemd --list");
-    console.log("");
-    console.log("Commands:");
-    console.log("  init         Create .strikemd/checks.md with default checks");
-    console.log("");
-    console.log("Options:");
-    console.log("  --key <key>  Anthropic API key (or set ANTHROPIC_API_KEY env var / .env)");
-    console.log("  --list       List available checks");
+  if (args.includes("--version") || args.includes("-v")) {
+    const pkg = await Bun.file(join(import.meta.dir, "..", "package.json")).json();
+    console.log(pkg.version);
     process.exit(0);
   }
 
-  // Handle init subcommand (before project root discovery — init creates .strikemd/)
+  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: strikemd <file.md> [--key <api-key>]");
+    console.log("       strikemd init");
+    console.log("       strikemd list");
+    console.log("");
+    console.log("Commands:");
+    console.log("  init         Create .strikemd/checks.md with default checks");
+    console.log("  list         List available checks");
+    console.log("");
+    console.log("Options:");
+    console.log("  --key <key>  Anthropic API key (or set ANTHROPIC_API_KEY env var / .env)");
+    process.exit(0);
+  }
+
+  // Subcommands (before project root discovery — init creates .strikemd/)
   if (args[0] === "init") {
     const dest = resolve(process.cwd(), ".strikemd");
     const checksPath = join(dest, "checks.md");
@@ -35,6 +41,22 @@ async function main() {
     mkdirSync(dest, { recursive: true });
     await Bun.write(checksPath, defaults);
     console.log("Created .strikemd/checks.md — edit this file to customize your checks.");
+    process.exit(0);
+  }
+
+  if (args[0] === "list") {
+    const cwd = process.cwd();
+    let projectRoot = cwd;
+    let dir = cwd;
+    while (dir !== "/") {
+      if (existsSync(resolve(dir, ".strikemd")) || existsSync(resolve(dir, ".git"))) {
+        projectRoot = dir;
+        break;
+      }
+      dir = dirname(dir);
+    }
+    const checks = await loadChecks(projectRoot);
+    listChecks(checks);
     process.exit(0);
   }
 
@@ -62,13 +84,6 @@ async function main() {
     dir = dirname(dir);
   }
 
-  // Handle --list
-  if (filteredArgs[0] === "--list") {
-    const checks = await loadChecks(projectRoot);
-    listChecks(checks);
-    process.exit(0);
-  }
-
   // Parse file argument
   const filePath = resolve(filteredArgs[0]);
   if (!existsSync(filePath)) {
@@ -88,7 +103,7 @@ async function main() {
         const content = await Bun.file(envPath).text();
         const match = content.match(/ANTHROPIC_API_KEY=(.+)/);
         if (match) {
-          apiKey = match[1].trim();
+          apiKey = match[1].trim().replace(/^["']|["']$/g, "");
           break;
         }
       }
