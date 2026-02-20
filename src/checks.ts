@@ -24,20 +24,17 @@ function parseChecksMarkdown(content: string): Record<string, Check> {
 }
 
 export async function loadChecks(projectRoot: string): Promise<Record<string, Check>> {
-  // Load built-in defaults
-  const defaultsPath = join(import.meta.dir, "..", "checks", "defaults.md");
-  const defaultsContent = await Bun.file(defaultsPath).text();
-  const checks = parseChecksMarkdown(defaultsContent);
-
-  // Merge user checks from .strikemd/checks.md
+  // If user has .strikemd/checks.md, use it exclusively (overrides built-ins)
   const userPath = join(projectRoot, ".strikemd", "checks.md");
   if (existsSync(userPath)) {
     const userContent = await Bun.file(userPath).text();
-    const userChecks = parseChecksMarkdown(userContent);
-    Object.assign(checks, userChecks);
+    return parseChecksMarkdown(userContent);
   }
 
-  return checks;
+  // Otherwise fall back to built-in defaults
+  const defaultsPath = join(import.meta.dir, "..", "checks", "defaults.md");
+  const defaultsContent = await Bun.file(defaultsPath).text();
+  return parseChecksMarkdown(defaultsContent);
 }
 
 export function listChecks(checks: Record<string, Check>): void {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { resolve, dirname } from "path";
-import { existsSync } from "fs";
+import { resolve, dirname, join } from "path";
+import { existsSync, mkdirSync } from "fs";
 import { loadChecks, listChecks } from "./checks";
 import { startServer } from "./server";
 
@@ -10,11 +10,31 @@ async function main() {
 
   if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
     console.log("Usage: strikemd <file.md> [--key <api-key>]");
+    console.log("       strikemd init");
     console.log("       strikemd --list");
+    console.log("");
+    console.log("Commands:");
+    console.log("  init         Create .strikemd/checks.md with default checks");
     console.log("");
     console.log("Options:");
     console.log("  --key <key>  Anthropic API key (or set ANTHROPIC_API_KEY env var / .env)");
     console.log("  --list       List available checks");
+    process.exit(0);
+  }
+
+  // Handle init subcommand (before project root discovery — init creates .strikemd/)
+  if (args[0] === "init") {
+    const dest = resolve(process.cwd(), ".strikemd");
+    const checksPath = join(dest, "checks.md");
+    if (existsSync(checksPath)) {
+      console.error("Already initialized: .strikemd/checks.md exists");
+      process.exit(1);
+    }
+    const defaultsPath = join(import.meta.dir, "..", "checks", "defaults.md");
+    const defaults = await Bun.file(defaultsPath).text();
+    mkdirSync(dest, { recursive: true });
+    await Bun.write(checksPath, defaults);
+    console.log("Created .strikemd/checks.md — edit this file to customize your checks.");
     process.exit(0);
   }
 
