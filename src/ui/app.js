@@ -214,8 +214,18 @@ function renderAnnotated() {
     return placeholder;
   });
 
+  // Sanitize any leftover <strike>/<del>/<ins> tags that the regex didn't match
+  // (e.g. comment-only annotations with no <del>/<ins> inside)
+  const sanitized = withPlaceholders
+    .replace(/<strike[\s>]/g, (m) => "&lt;strike" + m.slice(7))
+    .replace(/<\/strike>/g, "&lt;/strike&gt;")
+    .replace(/<del>/g, "&lt;del&gt;")
+    .replace(/<\/del>/g, "&lt;/del&gt;")
+    .replace(/<ins>/g, "&lt;ins&gt;")
+    .replace(/<\/ins>/g, "&lt;/ins&gt;");
+
   // Render the markdown with placeholders
-  let html = marked.parse(withPlaceholders);
+  let html = marked.parse(sanitized);
 
   // Replace placeholders with styled spans
   for (const { ci, deleted, inserted } of placeholders) {
