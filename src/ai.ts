@@ -4,7 +4,6 @@ import { validate } from "./parse";
 import {
   splitIntoBlocks,
   formatBlocksForModel,
-  parseModelOutput,
   reconstruct,
 } from "./reconstruct";
 
@@ -42,64 +41,140 @@ RULES:
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const THINKING_BUDGET = 10000;
 
-export async function runAnnotation(
+export type StreamEvent =
+  | { type: "status"; message: string }
+  | { type: "progress"; current: number; total: number; blockStatus: string }
+  | { type: "done"; annotated: string }
+  | { type: "error"; message: string };
+
+export async function* streamAnnotation(
   markdown: string,
   check: Check,
   apiKey: string,
   model: string = DEFAULT_MODEL
-): Promise<string> {
-  const client = new Anthropic({ apiKey });
+): AsyncGenerator<StreamEvent> {
+  try {
+    const client = new Anthropic({ apiKey });
 
-  // Split document into blocks
-  const { frontmatter, blocks } = splitIntoBlocks(markdown);
-  const numberedInput = formatBlocksForModel(blocks);
+    // Split document into blocks
+    const { frontmatter, blocks } = splitIntoBlocks(markdown);
+    const numberedInput = formatBlocksForModel(blocks);
+    const totalBlocks = blocks.length;
 
-  console.log(`  ${blocks.length} blocks`);
+    console.log(`  ${totalBlocks} blocks`);
+    yield { type: "status", message: `Analyzing ${totalBlocks} blocks...` };
 
-  const systemPrompt = `${check.prompt}\n${ANNOTATION_INSTRUCTIONS}`;
+    const systemPrompt = `${check.prompt}\n${ANNOTATION_INSTRUCTIONS}`;
 
-  const message = await client.messages.create({
-    model,
-    max_tokens: 16384,
-    thinking: {
-      type: "enabled",
-      budget_tokens: THINKING_BUDGET,
-    },
-    system: systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: `Here is the document to review:\n\n${numberedInput}`,
+    const stream = client.messages.stream({
+      model,
+      max_tokens: 16384,
+      thinking: {
+        type: "enabled",
+        budget_tokens: THINKING_BUDGET,
       },
-    ],
-  });
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: `Here is the document to review:\n\n${numberedInput}`,
+        },
+      ],
+    });
 
-  // Extract the text response (skip thinking blocks)
-  let responseText = "";
-  for (const block of message.content) {
-    if (block.type === "text") {
-      responseText = block.text;
-      break;
+    // Incremental state
+    let textBuffer = "";
+    let thinkingStarted = false;
+    let textStarted = false;
+    let completedBlocks = 0;
+    const parsedOutput = new Map<number, string>();
+    let currentNum: number | null = null;
+    let currentContent = "";
+
+    for await (const event of stream) {
+      if (event.type === "content_block_start") {
+        const blockType = event.content_block.type;
+        if (blockType === "thinking" && !thinkingStarted) {
+          thinkingStarted = true;
+          yield { type: "status", message: "Thinking..." };
+        } else if (blockType === "text" && !textStarted) {
+          textStarted = true;
+          yield { type: "status", message: `Reviewing blocks (0/${totalBlocks})...` };
+        }
+      } else if (event.type === "content_block_delta") {
+        if (event.delta.type === "text_delta") {
+          textBuffer += event.delta.text;
+
+          // Parse complete lines from the buffer
+          let newlineIdx: number;
+          while ((newlineIdx = textBuffer.indexOf("\n")) !== -1) {
+            const line = textBuffer.slice(0, newlineIdx);
+            textBuffer = textBuffer.slice(newlineIdx + 1);
+
+            if (line.trim() === "") continue;
+
+            const match = line.match(/^(\d+)\s+(.*)/);
+            if (match) {
+              // New numbered line — finalize previous block
+              if (currentNum !== null) {
+                parsedOutput.set(currentNum, currentContent.trim());
+                completedBlocks++;
+                const status = currentContent.trim() === "lgtm" ? "lgtm" : "changes";
+                yield { type: "progress", current: completedBlocks, total: totalBlocks, blockStatus: status };
+              }
+              currentNum = parseInt(match[1], 10);
+              currentContent = match[2];
+            } else if (currentNum !== null) {
+              // Continuation of current block (multi-line)
+              currentContent += "\n" + line;
+            }
+          }
+        }
+      }
     }
+
+    // Finalize any remaining text in the buffer (last line without trailing newline)
+    if (textBuffer.trim()) {
+      const match = textBuffer.match(/^(\d+)\s+(.*)/s);
+      if (match) {
+        if (currentNum !== null) {
+          parsedOutput.set(currentNum, currentContent.trim());
+          completedBlocks++;
+          const status = currentContent.trim() === "lgtm" ? "lgtm" : "changes";
+          yield { type: "progress", current: completedBlocks, total: totalBlocks, blockStatus: status };
+        }
+        currentNum = parseInt(match[1], 10);
+        currentContent = match[2];
+      } else if (currentNum !== null) {
+        currentContent += "\n" + textBuffer;
+      }
+    }
+
+    // Save the very last block
+    if (currentNum !== null) {
+      parsedOutput.set(currentNum, currentContent.trim());
+      completedBlocks++;
+      const status = currentContent.trim() === "lgtm" ? "lgtm" : "changes";
+      yield { type: "progress", current: completedBlocks, total: totalBlocks, blockStatus: status };
+    }
+
+    // Reconstruct and validate
+    yield { type: "status", message: "Reconstructing..." };
+
+    const { annotated, warnings } = reconstruct(parsedOutput, frontmatter, blocks);
+    for (const w of warnings) {
+      console.warn("  ⚠", w);
+    }
+
+    const errors = validate(annotated);
+    if (errors.length > 0) {
+      console.warn("Warning: annotation issues:", errors);
+    }
+
+    console.log(`  ${completedBlocks}/${totalBlocks} blocks reviewed`);
+    yield { type: "done", annotated };
+  } catch (err: any) {
+    console.error("Streaming error:", err);
+    yield { type: "error", message: err.message ?? "AI request failed" };
   }
-
-  if (!responseText) {
-    throw new Error("No text response from model");
-  }
-
-  // Parse and reconstruct
-  const parsed = parseModelOutput(responseText);
-  const { annotated, warnings } = reconstruct(parsed, frontmatter, blocks);
-
-  for (const w of warnings) {
-    console.warn("  ⚠", w);
-  }
-
-  // Validate the reconstructed document
-  const errors = validate(annotated);
-  if (errors.length > 0) {
-    console.warn("Warning: annotation issues:", errors);
-  }
-
-  return annotated;
 }

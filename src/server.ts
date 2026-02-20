@@ -1,6 +1,6 @@
 import { join } from "path";
 import { loadChecks } from "./checks";
-import { runAnnotation } from "./ai";
+import { streamAnnotation } from "./ai";
 
 interface ServerOptions {
   filePath: string;
@@ -14,6 +14,7 @@ export function startServer(options: ServerOptions): { url: string; stop: () => 
 
   const server = Bun.serve({
     port: 0,
+    idleTimeout: 0, // disable — SSE streams are idle during model thinking
     async fetch(req) {
       const url = new URL(req.url);
 
@@ -50,7 +51,7 @@ export function startServer(options: ServerOptions): { url: string; stop: () => 
         return Response.json(list);
       }
 
-      // API: run annotation (reloads checks to pick up edits)
+      // API: run annotation with SSE streaming (reloads checks to pick up edits)
       if (url.pathname === "/api/annotate" && req.method === "POST") {
         try {
           const checks = await loadChecks(projectRoot);
@@ -59,10 +60,34 @@ export function startServer(options: ServerOptions): { url: string; stop: () => 
           if (!check) {
             return Response.json({ error: `Unknown check: ${body.checkName}` }, { status: 400 });
           }
+
           console.log(`Running check "${body.checkName}" with ${body.model ?? "default model"}...`);
-          const annotated = await runAnnotation(body.markdown, check, apiKey, body.model);
-          console.log(`Check "${body.checkName}" complete.`);
-          return Response.json({ annotated });
+
+          const encoder = new TextEncoder();
+          const sseStream = new ReadableStream({
+            async start(controller) {
+              try {
+                for await (const evt of streamAnnotation(body.markdown, check, apiKey, body.model)) {
+                  controller.enqueue(encoder.encode(`event: ${evt.type}\ndata: ${JSON.stringify(evt)}\n\n`));
+                  if (evt.type === "done") {
+                    console.log(`Check "${body.checkName}" complete.`);
+                  }
+                }
+              } catch (err: any) {
+                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ type: "error", message: err.message ?? "Stream failed" })}\n\n`));
+              } finally {
+                controller.close();
+              }
+            },
+          });
+
+          return new Response(sseStream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+            },
+          });
         } catch (err: any) {
           console.error("Annotation error:", err);
           return Response.json({ error: err.message ?? "AI request failed" }, { status: 500 });

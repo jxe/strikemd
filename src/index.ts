@@ -14,7 +14,7 @@ async function main() {
     process.exit(0);
   }
 
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+  if (args.length === 0 || args[0] === "help" || args.includes("--help") || args.includes("-h")) {
     console.log("Usage: strikemd <file.md> [--key <api-key>]");
     console.log("       strikemd init");
     console.log("       strikemd list");

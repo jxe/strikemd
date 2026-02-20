@@ -2,7 +2,8 @@
 let currentMarkdown = "";
 let annotatedMarkdown = null;
 let changes = [];
-let dirty = false;
+const history = [];
+const MAX_HISTORY = 50;
 
 // --- Init ---
 
@@ -35,9 +36,24 @@ async function init() {
   });
 
   document.getElementById("run-btn").addEventListener("click", runCheck);
-  document.getElementById("save-btn").addEventListener("click", saveFile);
-  document.getElementById("accept-all-btn").addEventListener("click", acceptAll);
-  document.getElementById("reject-all-btn").addEventListener("click", rejectAll);
+  document.getElementById("accept-all-btn").addEventListener("click", () => { closeBulkDropdown(); acceptAll(); });
+  document.getElementById("reject-all-btn").addEventListener("click", () => { closeBulkDropdown(); rejectAll(); });
+  document.getElementById("undo-btn").addEventListener("click", undo);
+
+  // Dropdown toggle
+  document.querySelector("#bulk-actions .dropdown-toggle").addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("bulk-actions").classList.toggle("open");
+  });
+  document.addEventListener("click", closeBulkDropdown);
+
+  // Cmd+Z / Ctrl+Z for undo
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    }
+  });
 }
 
 // --- Render plain markdown ---
@@ -62,8 +78,8 @@ async function runCheck() {
 
   const runBtn = document.getElementById("run-btn");
   runBtn.disabled = true;
-  showLoading(true);
-  setStatus("Running check...", "loading");
+  showProgress(true);
+  setStatus("", "");
 
   try {
     const resp = await fetch("/api/annotate", {
@@ -72,23 +88,67 @@ async function runCheck() {
       body: JSON.stringify({ markdown: currentMarkdown, checkName, model: document.getElementById("model-select").value }),
     });
 
-    const data = await resp.json();
-    if (data.error) {
+    if (!resp.ok) {
+      const data = await resp.json();
       setStatus(`Error: ${data.error}`, "error");
       return;
     }
 
-    annotatedMarkdown = data.annotated;
-    changes = parseChanges(annotatedMarkdown);
-    setStatus(`${changes.length} suggestion${changes.length !== 1 ? "s" : ""}`, "");
+    // Read SSE stream
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    renderAnnotated();
-    showBulkButtons(true);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE events from buffer
+      let boundaryIdx;
+      while ((boundaryIdx = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, boundaryIdx);
+        buffer = buffer.slice(boundaryIdx + 2);
+
+        let eventType = "message";
+        let data = "";
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("event: ")) eventType = line.slice(7);
+          else if (line.startsWith("data: ")) data = line.slice(6);
+        }
+        if (!data) continue;
+
+        handleStreamEvent(eventType, JSON.parse(data));
+      }
+    }
   } catch (err) {
     setStatus(`Error: ${err.message}`, "error");
   } finally {
     runBtn.disabled = false;
-    showLoading(false);
+    showProgress(false);
+  }
+}
+
+function handleStreamEvent(eventType, evt) {
+  switch (eventType) {
+    case "status":
+      updateProgressText(evt.message);
+      break;
+    case "progress":
+      updateProgressBar(evt.current, evt.total);
+      updateProgressText(`Block ${evt.current}/${evt.total}: ${evt.blockStatus}`);
+      break;
+    case "done":
+      annotatedMarkdown = evt.annotated;
+      changes = parseChanges(annotatedMarkdown);
+      setStatus(`${changes.length} suggestion${changes.length !== 1 ? "s" : ""}`, "");
+      renderAnnotated();
+      showBulkButtons(true);
+      break;
+    case "error":
+      setStatus(`Error: ${evt.message}`, "error");
+      break;
   }
 }
 
@@ -214,57 +274,100 @@ function renderAnnotated() {
 }
 
 
+// --- Undo / History ---
+
+function pushHistory() {
+  history.push({ annotatedMarkdown, currentMarkdown, changes: [...changes] });
+  if (history.length > MAX_HISTORY) history.shift();
+  document.getElementById("undo-btn").disabled = false;
+}
+
+function undo() {
+  if (history.length === 0) return;
+  const snapshot = history.pop();
+  annotatedMarkdown = snapshot.annotatedMarkdown;
+  currentMarkdown = snapshot.currentMarkdown;
+  changes = snapshot.changes;
+
+  document.getElementById("undo-btn").disabled = history.length === 0;
+
+  if (changes.length === 0) {
+    renderPlainMarkdown(currentMarkdown);
+    showBulkButtons(false);
+    setStatus("All changes resolved", "");
+  } else {
+    renderAnnotated();
+    showBulkButtons(true);
+    setStatus(`${changes.length} suggestion${changes.length !== 1 ? "s" : ""} remaining`, "");
+  }
+  saveFile();
+}
+
 // --- Accept / Reject ---
 
 function acceptChange(ci) {
   const change = changes[ci];
   if (!change) return;
 
+  pushHistory();
+
   // Read possibly-edited insertion text from the card
   const insEl = document.querySelector(`.strike-card-ins[data-ci="${ci}"]`);
   const insertedText = insEl ? insEl.textContent : change.inserted;
 
-  // Update the annotated markdown: replace this change's annotation with inserted text
-  annotatedMarkdown = annotatedMarkdown.replace(
-    change.fullMatch,
-    insertedText ?? ""
-  );
-
-  // Update currentMarkdown (strip frontmatter annotations, resolve this change)
-  resolveCurrentMarkdown();
-
-  // Re-parse and re-render
-  changes = parseChanges(annotatedMarkdown);
-  dirty = true;
-  document.getElementById("save-btn").disabled = false;
-
-  if (changes.length === 0) {
-    renderPlainMarkdown(currentMarkdown);
-    showBulkButtons(false);
-    setStatus("All changes resolved", "");
-  } else {
-    renderAnnotated();
-    setStatus(
-      `${changes.length} suggestion${changes.length !== 1 ? "s" : ""} remaining`,
-      ""
-    );
-  }
+  annotatedMarkdown =
+    annotatedMarkdown.slice(0, change.startOffset) +
+    (insertedText ?? "") +
+    annotatedMarkdown.slice(change.endOffset);
+  afterMutation();
 }
 
 function rejectChange(ci) {
   const change = changes[ci];
   if (!change) return;
 
-  // Replace this change's annotation with deleted text (keep original)
-  annotatedMarkdown = annotatedMarkdown.replace(
-    change.fullMatch,
-    change.deleted ?? ""
-  );
+  pushHistory();
 
+  annotatedMarkdown =
+    annotatedMarkdown.slice(0, change.startOffset) +
+    (change.deleted ?? "") +
+    annotatedMarkdown.slice(change.endOffset);
+  afterMutation();
+}
+
+function acceptAll() {
+  if (!annotatedMarkdown) return;
+
+  pushHistory();
+
+  // Iterate in reverse so earlier offsets stay valid
+  for (let i = changes.length - 1; i >= 0; i--) {
+    const change = changes[i];
+    const insEl = document.querySelector(`.strike-card-ins[data-ci="${change.index}"]`);
+    const text = insEl ? insEl.textContent : change.inserted;
+    annotatedMarkdown =
+      annotatedMarkdown.slice(0, change.startOffset) +
+      (text ?? "") +
+      annotatedMarkdown.slice(change.endOffset);
+  }
+  afterMutation();
+}
+
+function rejectAll() {
+  if (!annotatedMarkdown) return;
+
+  pushHistory();
+
+  annotatedMarkdown = annotatedMarkdown.replace(
+    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
+    (_m, _comment, del1, _ins1, _ins2, del2) => del1 ?? del2 ?? ""
+  );
+  afterMutation();
+}
+
+function afterMutation() {
   resolveCurrentMarkdown();
   changes = parseChanges(annotatedMarkdown);
-  dirty = true;
-  document.getElementById("save-btn").disabled = false;
 
   if (changes.length === 0) {
     renderPlainMarkdown(currentMarkdown);
@@ -272,53 +375,13 @@ function rejectChange(ci) {
     setStatus("All changes resolved", "");
   } else {
     renderAnnotated();
-    setStatus(
-      `${changes.length} suggestion${changes.length !== 1 ? "s" : ""} remaining`,
-      ""
-    );
+    showBulkButtons(true);
+    setStatus(`${changes.length} suggestion${changes.length !== 1 ? "s" : ""} remaining`, "");
   }
-}
-
-function acceptAll() {
-  if (!annotatedMarkdown) return;
-  // Apply any user edits to insertion text before bulk-accepting
-  for (const change of changes) {
-    const insEl = document.querySelector(`.strike-card-ins[data-ci="${change.index}"]`);
-    if (insEl) {
-      const editedText = insEl.textContent;
-      annotatedMarkdown = annotatedMarkdown.replace(change.fullMatch, editedText ?? "");
-    } else {
-      annotatedMarkdown = annotatedMarkdown.replace(change.fullMatch, change.inserted ?? "");
-    }
-  }
-  resolveCurrentMarkdown();
-  changes = [];
-  dirty = true;
-  document.getElementById("save-btn").disabled = false;
-  renderPlainMarkdown(currentMarkdown);
-  showBulkButtons(false);
-  setStatus("All changes accepted", "");
-}
-
-function rejectAll() {
-  if (!annotatedMarkdown) return;
-  // Reject all remaining changes
-  annotatedMarkdown = annotatedMarkdown.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_m, _comment, del1, _ins1, _ins2, del2) => del1 ?? del2 ?? ""
-  );
-  resolveCurrentMarkdown();
-  changes = [];
-  dirty = true;
-  document.getElementById("save-btn").disabled = false;
-  renderPlainMarkdown(currentMarkdown);
-  showBulkButtons(false);
-  setStatus("All changes rejected", "");
+  saveFile();
 }
 
 function resolveCurrentMarkdown() {
-  // Current markdown is the annotated markdown with all resolved changes
-  // Strip any remaining annotations by keeping deleted text (original)
   currentMarkdown = annotatedMarkdown.replace(
     new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
     (_m, _comment, del1, _ins1, _ins2, del2) => del1 ?? del2 ?? ""
@@ -329,19 +392,13 @@ function resolveCurrentMarkdown() {
 
 async function saveFile() {
   try {
-    setStatus("Saving...", "loading");
     const resp = await fetch("/api/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ markdown: currentMarkdown }),
     });
     const data = await resp.json();
-    if (data.ok) {
-      dirty = false;
-      document.getElementById("save-btn").disabled = true;
-      setStatus("Saved", "");
-      showToast("File saved");
-    } else {
+    if (!data.ok) {
       setStatus(`Save failed: ${data.error}`, "error");
     }
   } catch (err) {
@@ -441,14 +498,21 @@ function setStatus(text, className) {
   el.className = "status" + (className ? " " + className : "");
 }
 
-function showLoading(on) {
+function showProgress(on) {
   let overlay = document.getElementById("loading-overlay");
   if (on) {
     if (!overlay) {
       overlay = document.createElement("div");
       overlay.id = "loading-overlay";
       overlay.className = "loading-overlay";
-      overlay.innerHTML = '<span class="spinner"></span>Running AI check...';
+      overlay.innerHTML = `
+        <div class="progress-container">
+          <div class="progress-bar-track">
+            <div id="progress-bar-fill" class="progress-bar-fill"></div>
+          </div>
+          <div id="progress-text" class="progress-text">Starting...</div>
+        </div>
+      `;
       document.body.appendChild(overlay);
     }
   } else {
@@ -456,9 +520,24 @@ function showLoading(on) {
   }
 }
 
+function updateProgressBar(current, total) {
+  const fill = document.getElementById("progress-bar-fill");
+  if (fill) fill.style.width = `${Math.round((current / total) * 100)}%`;
+}
+
+function updateProgressText(text) {
+  const el = document.getElementById("progress-text");
+  if (el) el.textContent = text;
+}
+
 function showBulkButtons(on) {
-  document.getElementById("accept-all-btn").style.display = on ? "" : "none";
-  document.getElementById("reject-all-btn").style.display = on ? "" : "none";
+  const dropdown = document.getElementById("bulk-actions");
+  dropdown.style.display = on ? "" : "none";
+  dropdown.classList.remove("open");
+}
+
+function closeBulkDropdown() {
+  document.getElementById("bulk-actions").classList.remove("open");
 }
 
 function showToast(message) {

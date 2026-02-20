@@ -24,11 +24,16 @@
       </select>
       <button id="run-btn" class="btn btn-primary" disabled>Run</button>
       <span id="status" class="status"></span>
+      <div id="bulk-actions" class="dropdown" style="display:none">
+        <button class="dropdown-toggle">&#9662;</button>
+        <div class="dropdown-menu">
+          <button id="accept-all-btn" class="dropdown-item dropdown-item-accept">Accept All</button>
+          <button id="reject-all-btn" class="dropdown-item dropdown-item-reject">Reject All</button>
+        </div>
+      </div>
     </div>
     <div class="toolbar-right">
-      <button id="accept-all-btn" class="btn btn-accept" style="display:none">Accept All</button>
-      <button id="reject-all-btn" class="btn btn-reject" style="display:none">Reject All</button>
-      <button id="save-btn" class="btn btn-save" disabled>Save</button>
+      <button id="undo-btn" class="btn btn-undo" disabled>Undo</button>
     </div>
   </header>
 

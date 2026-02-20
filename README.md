@@ -6,10 +6,9 @@ AI-powered suggestion mode for markdown files. Run editorial checks and review c
 
 - 🔍 **AI editorial checks** — run prose checks like "remove redundancy", "hedge strong claims", "clarify unclear sentences" against any markdown file
 - 📝 **Inline suggestions** — see deletions, insertions, and replacements rendered inline with your document
-- ✅ **Accept/reject** — review each suggestion individually or bulk accept/reject all
+- ✅ **Accept/reject** — review each suggestion
 - 💬 **Reviewer comments** — every suggestion includes an explanation of why the change improves the text
 - 🔧 **Custom checks** — run `strikemd init` to customize which checks you use
-- 🤖 **Model picker** — choose between Sonnet 4.6, Sonnet 4.5, Opus 4.6, or Haiku 4.5 in the UI
 - 💾 **Save in place** — accepted changes write back to the original file
 
 ## Install
@@ -37,8 +36,8 @@ strikemd my-essay.md --key sk-ant-...
 Other commands:
 
 ```bash
+strikemd help       # show usage info
 strikemd init       # create .strikemd/checks.md with default checks
-strikemd list       # list available checks
 strikemd -v         # print version
 ```
 
@@ -65,7 +64,7 @@ Find technical jargon that could be replaced with plain language. Rewrite for a 
 Break paragraphs longer than 4 sentences into smaller ones.
 ```
 
-When `.strikemd/checks.md` exists, it replaces the built-in checks entirely — only the checks in your file will appear.
+When `.strikemd/checks.md` exists, it replaces the built-in checks entirely.
 
 ## License
 

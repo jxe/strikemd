@@ -11,8 +11,7 @@
     "checks"
   ],
   "scripts": {
-    "link": "bun link",
-    "publish": "npm publish"
+    "link": "bun link"
   },
   "keywords": ["markdown", "editor", "ai", "editorial", "suggestions", "cli", "bun"],
   "license": "MIT",
