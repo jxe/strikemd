@@ -251,8 +251,15 @@ body {
   display: block;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 80px;
-  overflow: hidden;
+  cursor: text;
+  outline: none;
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.strike-card-ins:focus {
+  border-color: #27ae60;
+  background: rgba(39, 174, 96, 0.1);
 }
 
 .strike-card-actions {

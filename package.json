@@ -1,6 +1,6 @@
 {
   "name": "strikemd",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "AI-powered suggestion-mode editor for markdown. Run editorial checks and review changes Google Docs-style in the browser.",
   "bin": {

@@ -1,34 +1,46 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Check } from "./checks";
 import { validate } from "./parse";
+import {
+  splitIntoBlocks,
+  formatBlocksForModel,
+  parseModelOutput,
+  reconstruct,
+} from "./reconstruct";
 
 const ANNOTATION_INSTRUCTIONS = `
 RESPONSE FORMAT — you must follow these rules exactly:
 
-Return the COMPLETE document with your suggested changes marked inline using this annotation format:
+The document has been divided into numbered blocks. You will see each block prefixed with [N].
 
-For replacements (old text → new text):
-<strike comment="explanation"><del>old text</del><ins>new text</ins></strike>
+You must respond with one line per block, in order. For each block:
 
-For deletions (text removed):
-<strike comment="explanation"><del>text to remove</del></strike>
+If the block needs NO changes, write:
+N lgtm
 
-For insertions (new text added):
-<strike comment="explanation"><ins>new text to add</ins></strike>
+If the block needs changes, write ONLY the annotation(s) — do NOT repeat the surrounding text:
+N <strike comment="explanation"><del>old text</del><ins>new text</ins></strike>
+
+Annotation types:
+- Replacement: <strike comment="why"><del>old text</del><ins>new text</ins></strike>
+- Deletion: <strike comment="why"><del>text to remove</del></strike>
+- Insertion: anchor text <strike comment="why"><ins>new text</ins></strike>
+  (include ~5 words before the <strike> tag so we can locate the insertion point)
+
+If a block has multiple changes, put all annotations on the same line separated by spaces.
 
 RULES:
-- Your response must begin with the document itself. Do NOT include any preamble, introduction, commentary, or explanation before or after the document.
-- Return the ENTIRE document. Every part not being changed must appear unchanged.
-- The comment attribute should briefly explain WHY the change improves the text (1-2 sentences).
+- You MUST include a line for every numbered block. Do not skip any.
+- Do NOT include any preamble, commentary, or explanation. Just the numbered lines.
+- The comment attribute should briefly explain WHY (1-2 sentences).
+- The <del> text must exactly match the original text in the block.
 - Content inside <del> and <ins> is raw markdown, not HTML-escaped.
-- Do NOT modify the YAML frontmatter (the block between --- delimiters at the top).
-- Do NOT split markdown syntax across change boundaries — each <del>/<ins> must contain complete markdown constructs.
-- Preserve all LaTeX math ($...$, $$...$$), footnotes, citations, and formatting exactly.
-- For changes inside fenced code blocks, replace the entire code block as a unit.
 - Do NOT use double quotes inside the comment attribute — use single quotes instead.
+- Preserve all LaTeX math, footnotes, citations, and formatting exactly.
 - Make targeted changes. Do not rewrite passages unnecessarily.`;
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
+const THINKING_BUDGET = 10000;
 
 export async function runAnnotation(
   markdown: string,
@@ -38,35 +50,56 @@ export async function runAnnotation(
 ): Promise<string> {
   const client = new Anthropic({ apiKey });
 
+  // Split document into blocks
+  const { frontmatter, blocks } = splitIntoBlocks(markdown);
+  const numberedInput = formatBlocksForModel(blocks);
+
+  console.log(`  ${blocks.length} blocks`);
+
   const systemPrompt = `${check.prompt}\n${ANNOTATION_INSTRUCTIONS}`;
 
   const message = await client.messages.create({
     model,
     max_tokens: 16384,
+    thinking: {
+      type: "enabled",
+      budget_tokens: THINKING_BUDGET,
+    },
     system: systemPrompt,
     messages: [
       {
         role: "user",
-        content: `Here is the document to review:\n\n${markdown}`,
+        content: `Here is the document to review:\n\n${numberedInput}`,
       },
     ],
   });
 
-  let responseText =
-    message.content[0].type === "text" ? message.content[0].text : "";
-
-  // Strip any preamble before the frontmatter
-  const fmIndex = responseText.indexOf("---");
-  if (fmIndex > 0) {
-    console.warn("Stripped AI preamble:", responseText.slice(0, fmIndex).trim());
-    responseText = responseText.slice(fmIndex);
+  // Extract the text response (skip thinking blocks)
+  let responseText = "";
+  for (const block of message.content) {
+    if (block.type === "text") {
+      responseText = block.text;
+      break;
+    }
   }
 
-  // Validate the response
-  const errors = validate(responseText);
+  if (!responseText) {
+    throw new Error("No text response from model");
+  }
+
+  // Parse and reconstruct
+  const parsed = parseModelOutput(responseText);
+  const { annotated, warnings } = reconstruct(parsed, frontmatter, blocks);
+
+  for (const w of warnings) {
+    console.warn("  ⚠", w);
+  }
+
+  // Validate the reconstructed document
+  const errors = validate(annotated);
   if (errors.length > 0) {
-    console.warn("Warning: AI response has annotation issues:", errors);
+    console.warn("Warning: annotation issues:", errors);
   }
 
-  return responseText;
+  return annotated;
 }

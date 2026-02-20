@@ -174,7 +174,7 @@ function renderAnnotated() {
       <div class="strike-card-comment">${escapeHtml(c.comment)}</div>
       <div class="strike-card-diff">
         ${c.deleted !== null ? `<div class="strike-card-del">${escapeHtml(truncate(c.deleted, 120))}</div>` : ""}
-        ${c.inserted !== null ? `<div class="strike-card-ins">${escapeHtml(truncate(c.inserted, 120))}</div>` : ""}
+        ${c.inserted !== null ? `<div class="strike-card-ins" contenteditable="true" data-ci="${i}">${escapeHtml(c.inserted)}</div>` : ""}
       </div>
       <div class="strike-card-actions">
         <button class="btn-card-accept" data-ci="${i}">Accept</button>
@@ -199,6 +199,11 @@ function renderAnnotated() {
     });
   });
 
+  // Stop clicks on editable ins text from triggering card click
+  sidebar.querySelectorAll(".strike-card-ins[contenteditable]").forEach((el) => {
+    el.addEventListener("click", (e) => e.stopPropagation());
+  });
+
   // Wire up hover highlighting
   setupHoverHighlighting();
 
@@ -215,10 +220,14 @@ function acceptChange(ci) {
   const change = changes[ci];
   if (!change) return;
 
+  // Read possibly-edited insertion text from the card
+  const insEl = document.querySelector(`.strike-card-ins[data-ci="${ci}"]`);
+  const insertedText = insEl ? insEl.textContent : change.inserted;
+
   // Update the annotated markdown: replace this change's annotation with inserted text
   annotatedMarkdown = annotatedMarkdown.replace(
     change.fullMatch,
-    change.inserted ?? ""
+    insertedText ?? ""
   );
 
   // Update currentMarkdown (strip frontmatter annotations, resolve this change)
@@ -272,11 +281,16 @@ function rejectChange(ci) {
 
 function acceptAll() {
   if (!annotatedMarkdown) return;
-  // Accept all remaining changes
-  annotatedMarkdown = annotatedMarkdown.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_m, _comment, _del1, ins1, ins2, _del2) => ins1 ?? ins2 ?? ""
-  );
+  // Apply any user edits to insertion text before bulk-accepting
+  for (const change of changes) {
+    const insEl = document.querySelector(`.strike-card-ins[data-ci="${change.index}"]`);
+    if (insEl) {
+      const editedText = insEl.textContent;
+      annotatedMarkdown = annotatedMarkdown.replace(change.fullMatch, editedText ?? "");
+    } else {
+      annotatedMarkdown = annotatedMarkdown.replace(change.fullMatch, change.inserted ?? "");
+    }
+  }
   resolveCurrentMarkdown();
   changes = [];
   dirty = true;
