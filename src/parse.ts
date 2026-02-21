@@ -1,4 +1,4 @@
-export interface StrikeChange {
+export interface Change {
   comment: string;
   deleted: string | null;
   inserted: string | null;
@@ -7,44 +7,58 @@ export interface StrikeChange {
   endOffset: number;
 }
 
-// Matches <strike> with <del>/<ins> in either order
-const STRIKE_RE =
-  /<strike\s+comment="([^"]*)">\s*(?:(?:<del>([\s\S]*?)<\/del>)\s*(?:<ins>([\s\S]*?)<\/ins>)?|(?:<ins>([\s\S]*?)<\/ins>)\s*(?:<del>([\s\S]*?)<\/del>)?)\s*<\/strike>/g;
+// Matches <del comment="..." [replaceWith="..."]>...</del> or <ins comment="...">...</ins>
+const CHANGE_RE =
+  /<(del|ins)\s+comment="([^"]*)"(?:\s+replaceWith="([^"]*)")?>([\s\S]*?)<\/\1>/g;
 
-export function parseChanges(annotated: string): StrikeChange[] {
-  const changes: StrikeChange[] = [];
-  const re = new RegExp(STRIKE_RE.source, STRIKE_RE.flags);
+export function parseChanges(annotated: string): Change[] {
+  const changes: Change[] = [];
+  const re = new RegExp(CHANGE_RE.source, CHANGE_RE.flags);
   let match: RegExpExecArray | null;
 
   while ((match = re.exec(annotated)) !== null) {
-    // Groups 2,3 = del-first order; groups 4,5 = ins-first order
-    const deleted = match[2] ?? match[5] ?? null;
-    const inserted = match[3] ?? match[4] ?? null;
-    changes.push({
-      comment: match[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&"),
-      deleted,
-      inserted,
-      fullMatch: match[0],
-      startOffset: match.index,
-      endOffset: match.index + match[0].length,
-    });
+    const tag = match[1];           // "del" or "ins"
+    const comment = match[2].replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+    const replaceWith = match[3];   // undefined if not present
+    const content = match[4];
+
+    if (tag === "del") {
+      changes.push({
+        comment,
+        deleted: content,
+        inserted: replaceWith != null ? replaceWith.replace(/&quot;/g, '"').replace(/&amp;/g, "&") : null,
+        fullMatch: match[0],
+        startOffset: match.index,
+        endOffset: match.index + match[0].length,
+      });
+    } else {
+      // <ins>
+      changes.push({
+        comment,
+        deleted: null,
+        inserted: content,
+        fullMatch: match[0],
+        startOffset: match.index,
+        endOffset: match.index + match[0].length,
+      });
+    }
   }
 
   return changes;
 }
 
 export function recoverOriginal(annotated: string): string {
-  return annotated.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_match, _comment, del1, _ins1, _ins2, del2) => del1 ?? del2 ?? ""
-  );
+  return annotated
+    .replace(/<del\s+comment="[^"]*"(?:\s+replaceWith="[^"]*")?>([\s\S]*?)<\/del>/g, '$1')
+    .replace(/<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>/g, '');
 }
 
 export function acceptAll(annotated: string): string {
-  return annotated.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_match, _comment, _del1, ins1, ins2, _del2) => ins1 ?? ins2 ?? ""
-  );
+  return annotated
+    .replace(/<del\s+comment="[^"]*"\s+replaceWith="([^"]*)">([\s\S]*?)<\/del>/g,
+      (_m, replaceWith) => replaceWith.replace(/&quot;/g, '"').replace(/&amp;/g, '&'))
+    .replace(/<del\s+comment="[^"]*">([\s\S]*?)<\/del>/g, '')
+    .replace(/<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>/g, '$1');
 }
 
 export function applyDecisions(
@@ -76,12 +90,9 @@ export function applyDecisions(
 }
 
 export function stripAllAnnotations(annotated: string): string {
-  return annotated.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_match, _comment, del1, ins1, ins2, del2) => {
-      return del1 ?? del2 ?? ins1 ?? ins2 ?? "";
-    }
-  );
+  return annotated
+    .replace(/<del\s+comment="[^"]*"(?:\s+replaceWith="[^"]*")?>([\s\S]*?)<\/del>/g, '$1')
+    .replace(/<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>/g, '$1');
 }
 
 export function validate(annotated: string): string[] {
@@ -96,7 +107,7 @@ export function validate(annotated: string): string[] {
   }
 
   const recovered = recoverOriginal(annotated);
-  if (recovered.includes("<strike") || recovered.includes("<del>") || recovered.includes("<ins>")) {
+  if (recovered.includes("<del ") || recovered.includes("<ins ")) {
     errors.push("Recovery left annotation artifacts — tags may be malformed");
   }
 

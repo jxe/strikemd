@@ -8,34 +8,34 @@ import {
 } from "./reconstruct";
 
 const ANNOTATION_INSTRUCTIONS = `
-RESPONSE FORMAT — you must follow these rules exactly:
+RESPONSE FORMAT — follow these rules exactly:
 
 The document has been divided into numbered blocks. You will see each block prefixed with [N].
 
-You must respond with one line per block, in order. For each block:
+Respond with one line per block, in order. For each block:
 
 If the block needs NO changes, write:
 N lgtm
 
-If the block needs changes, write ONLY the annotation(s) — do NOT repeat the surrounding text:
-N <strike comment="explanation"><del>old text</del><ins>new text</ins></strike>
+If the block needs changes, output the entire block text with annotation tags placed inline:
+N the full block text with <del comment="why">text to remove</del> and <ins comment="why">text to add</ins> tags placed where changes occur
 
 Annotation types:
-- Replacement: <strike comment="why"><del>old text</del><ins>new text</ins></strike>
-- Deletion: <strike comment="why"><del>text to remove</del></strike>
-- Insertion: anchor text <strike comment="why"><ins>new text</ins></strike>
-  (include ~5 words before the <strike> tag so we can locate the insertion point)
+- Replacement (preferred when replacing text): <del comment="why" replaceWith="new text">old text</del>
+- Deletion (only when removing with no replacement): <del comment="why">text to remove</del>
+- Insertion (only when adding with nothing removed): <ins comment="why">text to add</ins>
 
-If a block has multiple changes, put all annotations on the same line separated by spaces.
-
-RULES:
-- You MUST include a line for every numbered block. Do not skip any.
-- Do NOT include any preamble, commentary, or explanation. Just the numbered lines.
+FORMATTING RULES:
+- Include a line for every numbered block. Do not skip any.
+- Do not include any preamble, commentary, or explanation. Just the numbered lines.
+- For blocks with changes, output the complete block with annotation tags inline. Do not omit any text from the block.
+- The text inside <del>...</del> must exactly match the original text at that position in the block.
 - The comment attribute should briefly explain WHY (1-2 sentences).
-- The <del> text must exactly match the original text in the block.
-- Content inside <del> and <ins> is raw markdown, not HTML-escaped.
-- Do NOT use double quotes inside the comment attribute — use single quotes instead.
+- Use single quotes inside attributes to avoid escaping. If you must use double quotes, escape as &quot;
+- Content inside tags and attributes is raw markdown.
 - Preserve all LaTeX math, footnotes, citations, and formatting exactly.
+
+OTHER INSTRUCTIONS:
 - Make targeted changes. Do not rewrite passages unnecessarily.
 - Try to infer the audience and purpose of the document and make improvements that fit the style and tone.`;
 

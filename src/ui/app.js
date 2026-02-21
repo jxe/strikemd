@@ -160,27 +160,42 @@ function handleStreamEvent(eventType, evt) {
 
 // --- Parse annotations ---
 
-// Matches <strike> with <del>/<ins> in either order
-const STRIKE_RE =
-  /<strike\s+comment="([^"]*)">\s*(?:(?:<del>([\s\S]*?)<\/del>)\s*(?:<ins>([\s\S]*?)<\/ins>)?|(?:<ins>([\s\S]*?)<\/ins>)\s*(?:<del>([\s\S]*?)<\/del>)?)\s*<\/strike>/g;
+// Matches <del comment="..." [replaceWith="..."]>...</del> or <ins comment="...">...</ins>
+const CHANGE_RE =
+  /<(del|ins)\s+comment="([^"]*)"(?:\s+replaceWith="([^"]*)")?>([\s\S]*?)<\/\1>/g;
 
 function parseChanges(annotated) {
   const result = [];
-  const re = new RegExp(STRIKE_RE.source, STRIKE_RE.flags);
+  const re = new RegExp(CHANGE_RE.source, CHANGE_RE.flags);
   let match;
   while ((match = re.exec(annotated)) !== null) {
-    // Groups 2,3 = del-first order; groups 4,5 = ins-first order
-    const deleted = match[2] ?? match[5] ?? null;
-    const inserted = match[3] ?? match[4] ?? null;
-    result.push({
-      index: result.length,
-      comment: match[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&"),
-      deleted,
-      inserted,
-      fullMatch: match[0],
-      startOffset: match.index,
-      endOffset: match.index + match[0].length,
-    });
+    const tag = match[1];           // "del" or "ins"
+    const comment = match[2].replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+    const replaceWith = match[3];   // undefined if not present
+    const content = match[4];
+
+    if (tag === "del") {
+      result.push({
+        index: result.length,
+        comment,
+        deleted: content,
+        inserted: replaceWith != null ? replaceWith.replace(/&quot;/g, '"').replace(/&amp;/g, "&") : null,
+        fullMatch: match[0],
+        startOffset: match.index,
+        endOffset: match.index + match[0].length,
+      });
+    } else {
+      // <ins>
+      result.push({
+        index: result.length,
+        comment,
+        deleted: null,
+        inserted: content,
+        fullMatch: match[0],
+        startOffset: match.index,
+        endOffset: match.index + match[0].length,
+      });
+    }
   }
   return result;
 }
@@ -196,32 +211,32 @@ function renderAnnotated() {
   // Strip frontmatter, work only with the body
   const body = stripFrontmatter(annotatedMarkdown);
 
-  // Strategy: replace <strike> blocks with unique placeholders, render the
+  // Strategy: replace <del>/<ins> blocks with unique placeholders, render the
   // markdown normally, then swap placeholders with styled HTML spans.
-  // This gives proper markdown rendering (paragraphs, headings, lists, etc.)
-  // without the fragments-of-markdown problem.
-
-  const re = new RegExp(STRIKE_RE.source, STRIKE_RE.flags);
+  const re = new RegExp(CHANGE_RE.source, CHANGE_RE.flags);
   const placeholders = [];
   let ci = 0;
 
-  const withPlaceholders = body.replace(re, (fullMatch, comment, del1, ins1, ins2, del2) => {
-    const placeholder = `STRIKE_PLACEHOLDER_${ci}`;
-    const deleted = del1 ?? del2 ?? null;
-    const inserted = ins1 ?? ins2 ?? null;
-    placeholders.push({ ci, deleted, inserted });
+  const withPlaceholders = body.replace(re, (fullMatch, tag, comment, replaceWith, content) => {
+    const placeholder = `CHANGE_PLACEHOLDER_${ci}`;
+    if (tag === "del") {
+      placeholders.push({
+        ci,
+        deleted: content,
+        inserted: replaceWith != null ? replaceWith.replace(/&quot;/g, '"').replace(/&amp;/g, "&") : null,
+      });
+    } else {
+      placeholders.push({ ci, deleted: null, inserted: content });
+    }
     ci++;
     return placeholder;
   });
 
-  // Sanitize any leftover <strike>/<del>/<ins> tags that the regex didn't match
-  // (e.g. comment-only annotations with no <del>/<ins> inside)
+  // Sanitize any leftover <del>/<ins> tags that the regex didn't match
   const sanitized = withPlaceholders
-    .replace(/<strike[\s>]/g, (m) => "&lt;strike" + m.slice(7))
-    .replace(/<\/strike>/g, "&lt;/strike&gt;")
-    .replace(/<del>/g, "&lt;del&gt;")
+    .replace(/<del[\s>]/g, (m) => "&lt;del" + m.slice(4))
     .replace(/<\/del>/g, "&lt;/del&gt;")
-    .replace(/<ins>/g, "&lt;ins&gt;")
+    .replace(/<ins[\s>]/g, (m) => "&lt;ins" + m.slice(4))
     .replace(/<\/ins>/g, "&lt;/ins&gt;");
 
   // Render the markdown with placeholders
@@ -229,7 +244,7 @@ function renderAnnotated() {
 
   // Replace placeholders with styled spans
   for (const { ci, deleted, inserted } of placeholders) {
-    const placeholder = `STRIKE_PLACEHOLDER_${ci}`;
+    const placeholder = `CHANGE_PLACEHOLDER_${ci}`;
     let replacement = `<span class="strike-anchor" data-ci="${ci}"></span>`;
     if (deleted !== null) {
       replacement += `<span class="strike-del" data-ci="${ci}">${escapeHtml(deleted)}</span>`;
@@ -374,10 +389,14 @@ function rejectAll() {
 
   pushHistory();
 
-  annotatedMarkdown = annotatedMarkdown.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_m, _comment, del1, _ins1, _ins2, del2) => del1 ?? del2 ?? ""
-  );
+  // Iterate in reverse so earlier offsets stay valid
+  for (let i = changes.length - 1; i >= 0; i--) {
+    const change = changes[i];
+    annotatedMarkdown =
+      annotatedMarkdown.slice(0, change.startOffset) +
+      (change.deleted ?? "") +
+      annotatedMarkdown.slice(change.endOffset);
+  }
   afterMutation();
 }
 
@@ -399,10 +418,10 @@ function afterMutation() {
 }
 
 function resolveCurrentMarkdown() {
-  currentMarkdown = annotatedMarkdown.replace(
-    new RegExp(STRIKE_RE.source, STRIKE_RE.flags),
-    (_m, _comment, del1, _ins1, _ins2, del2) => del1 ?? del2 ?? ""
-  );
+  // Strip annotations, keeping original (del) text
+  currentMarkdown = annotatedMarkdown
+    .replace(/<del\s+comment="[^"]*"(?:\s+replaceWith="[^"]*")?>([\s\S]*?)<\/del>/g, '$1')
+    .replace(/<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>/g, '');
 }
 
 // --- Save ---

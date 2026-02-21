@@ -1,7 +1,3 @@
-// Matches <strike> with <del>/<ins> in either order (same as parse.ts)
-const STRIKE_RE =
-  /<strike\s+comment="([^"]*)">\s*(?:(?:<del>([\s\S]*?)<\/del>)\s*(?:<ins>([\s\S]*?)<\/ins>)?|(?:<ins>([\s\S]*?)<\/ins>)\s*(?:<del>([\s\S]*?)<\/del>)?)\s*<\/strike>/g;
-
 export interface BlockSplit {
   frontmatter: string;
   blocks: string[];
@@ -10,6 +6,41 @@ export interface BlockSplit {
 export interface ReconstructResult {
   annotated: string;
   warnings: string[];
+}
+
+/**
+ * Strip annotation tags, recovering original text.
+ * <del ...>text</del> → text (keep del content)
+ * <ins ...>text</ins> → "" (remove insertions)
+ */
+function stripAnnotations(text: string): string {
+  return text
+    .replace(/<del\s+comment="[^"]*"(?:\s+replaceWith="[^"]*")?>([\s\S]*?)<\/del>/g, '$1')
+    .replace(/<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>/g, '');
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Merge adjacent <del>+<ins> or <ins>+<del> pairs into a single <del replaceWith="">.
+ * The model sometimes outputs two tags instead of using replaceWith.
+ */
+function mergeAdjacentAnnotations(text: string): string {
+  // <del>...</del> immediately followed by <ins>...</ins>
+  text = text.replace(
+    /<del\s+comment="([^"]*)">([\s\S]*?)<\/del>\s*<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>/g,
+    (_m, comment, delContent, insContent) =>
+      `<del comment="${comment}" replaceWith="${escapeAttr(insContent)}">${delContent}</del>`
+  );
+  // <ins>...</ins> immediately followed by <del>...</del>
+  text = text.replace(
+    /<ins\s+comment="[^"]*">([\s\S]*?)<\/ins>\s*<del\s+comment="([^"]*)">([\s\S]*?)<\/del>/g,
+    (_m, insContent, comment, delContent) =>
+      `<del comment="${comment}" replaceWith="${escapeAttr(insContent)}">${delContent}</del>`
+  );
+  return text;
 }
 
 /**
@@ -69,10 +100,9 @@ export function formatBlocksForModel(blocks: string[]): string {
 }
 
 /**
- * Parse the model's compact output into a map of block number → content.
- * Each line is: "N lgtm" or "N <strike ...>...</strike>"
- * Multi-line blocks (e.g. code fences with changes) are handled by
- * continuing until the next numbered line.
+ * Parse the model's output into a map of block number → content.
+ * Each line is: "N lgtm" or "N <full block with annotations>"
+ * Multi-line blocks are handled by continuing until the next numbered line.
  */
 export function parseModelOutput(output: string): Map<number, string> {
   const result = new Map<number, string>();
@@ -105,45 +135,9 @@ export function parseModelOutput(output: string): Map<number, string> {
 }
 
 /**
- * Splice a single <strike> annotation into the original block text.
- * For replacements/deletions: find <del> text in original and replace with full tag.
- * For insertions: use the text before <strike> as an anchor.
- */
-function spliceAnnotation(original: string, annotation: string): { result: string; warning: string | null } {
-  // Extract del content to use as anchor
-  const delMatch = annotation.match(/<del>([\s\S]*?)<\/del>/);
-
-  if (delMatch) {
-    // Replacement or deletion: find <del> text in original
-    const delText = delMatch[1];
-    const idx = original.indexOf(delText);
-    if (idx === -1) {
-      return { result: original, warning: `Could not find <del> text in block: "${delText.slice(0, 50)}"` };
-    }
-    const result = original.slice(0, idx) + annotation + original.slice(idx + delText.length);
-    return { result, warning: null };
-  }
-
-  // Insertion only: look for anchor text before the <strike> tag
-  const strikeIdx = annotation.indexOf("<strike");
-  if (strikeIdx > 0) {
-    const anchor = annotation.slice(0, strikeIdx).trimEnd();
-    const anchorIdx = original.indexOf(anchor);
-    if (anchorIdx !== -1) {
-      const insertPoint = anchorIdx + anchor.length;
-      const strikeTag = annotation.slice(strikeIdx);
-      const result = original.slice(0, insertPoint) + " " + strikeTag + original.slice(insertPoint);
-      return { result, warning: null };
-    }
-    return { result: original, warning: `Could not find insertion anchor in block: "${anchor.slice(0, 50)}"` };
-  }
-
-  // Insertion with no anchor: append to end of block
-  return { result: original + " " + annotation, warning: "Insertion with no anchor, appended to block" };
-}
-
-/**
  * Reconstruct the full annotated document from model output + original blocks.
+ * The model outputs entire blocks with <del>/<ins> annotations inline,
+ * so reconstruction is just using the model's output directly.
  */
 export function reconstruct(
   parsedOutput: Map<number, string>,
@@ -163,37 +157,15 @@ export function reconstruct(
     } else if (modelContent === "lgtm") {
       resultBlocks.push(originalBlocks[i]);
     } else {
-      // Contains annotation(s) — splice each <strike> tag into the original
-      let block = originalBlocks[i];
-      const re = new RegExp(STRIKE_RE.source, STRIKE_RE.flags);
-
-      // Extract all annotations from the model's line, preserving any
-      // text before each one (anchors for insertions)
-      const annotations: string[] = [];
-      let lastEnd = 0;
-      let match: RegExpExecArray | null;
-
-      while ((match = re.exec(modelContent)) !== null) {
-        // Include any prefix text (anchor for insertions)
-        const prefix = modelContent.slice(lastEnd, match.index).trim();
-        const fullAnnotation = prefix ? prefix + " " + match[0] : match[0];
-        annotations.push(fullAnnotation);
-        lastEnd = match.index + match[0].length;
+      // Model output IS the annotated block — use it directly
+      // Merge adjacent <del>+<ins> pairs the model should have written as replaceWith
+      const merged = mergeAdjacentAnnotations(modelContent);
+      // Verify: stripping annotations should recover the original
+      const stripped = stripAnnotations(merged);
+      if (stripped !== originalBlocks[i]) {
+        warnings.push(`Block ${blockNum}: model modified text outside annotations`);
       }
-
-      if (annotations.length === 0) {
-        warnings.push(`Block ${blockNum}: model output has no annotations and isn't 'lgtm'`);
-        resultBlocks.push(originalBlocks[i]);
-        continue;
-      }
-
-      for (const annotation of annotations) {
-        const { result, warning } = spliceAnnotation(block, annotation);
-        block = result;
-        if (warning) warnings.push(`Block ${blockNum}: ${warning}`);
-      }
-
-      resultBlocks.push(block);
+      resultBlocks.push(merged);
     }
   }
 
